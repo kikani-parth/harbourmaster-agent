@@ -48,6 +48,11 @@ def _read_requests(stream, log):
     return requests
 
 
+def _severity(problems) -> tuple[int, int]:
+    """Rank an attempt: hard problems first, then total. Lower is better."""
+    return (sum(1 for p in problems if p.hard), len(problems))
+
+
 def _answer_one(client, rb, qid, question, log, register=()):
     """One question through the model, the validator, and at most one repair."""
     if question is None:
@@ -72,12 +77,19 @@ def _answer_one(client, rb, qid, question, log, register=()):
                 retry = client.ruling(question, truncated_from=truncated_from,
                                       repair=validate.repair_note(problems))
                 retry_problems = validate.check(retry.data, rb, question, register)
-                # Keep the repair only if it is genuinely no worse.
-                if len(retry_problems) <= len(problems):
+                # Keep the repair only if it is strictly better, weighing severity
+                # before count. Comparing counts alone accepted a retry that traded a
+                # mechanically-fixable soft problem for a hard fabricated quotation --
+                # 2 <= 2 -- and the fabrication reached stdout.
+                if _severity(retry_problems) < _severity(problems):
                     ruling, problems = retry, retry_problems
+                else:
+                    print(f"note: {qid} keeping first attempt; retry was not better "
+                          f"({_severity(problems)} -> {_severity(retry_problems)} "
+                          "as (hard, total))", file=log)
             except model.ModelUnavailable as exc:
                 print(f"warn: {qid} repair attempt failed ({exc})", file=log)
-        record, notes = validate.finalise(qid, ruling.data, rb, problems)
+        record, notes = validate.finalise(qid, ruling.data, rb, problems, question)
         for note in notes:
             print(f"note: {qid} {note}", file=log)
         if problems:

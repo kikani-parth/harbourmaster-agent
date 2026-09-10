@@ -58,7 +58,13 @@ NUMBER_WORD = re.compile(
 NUMBER_WORD_OK_NEXT = {"of", "another", "time", "per", "or", "and"}
 NUMBER_WORD_OK_PREV = {"no", "any", "each", "at", "as"}
 
-MARKDOWN = re.compile(r"\*{1,3}|_{2,}|^#{1,6}\s+|^\s*[-*+]\s+", re.MULTILINE)
+# An asterisk is emphasis only when it hugs non-space, non-digit text. A bare "*"
+# between digits is multiplication: stripping it turned "3*2 = 6" into "32 = 6", a
+# fabricated number inside a computed answer that no fixture would notice, since the
+# expected total was still present.
+MARKDOWN = re.compile(
+    r"^\s*[-*+]\s+|(?<![\d\s])\*{1,3}|\*{1,3}(?![\d\s])|_{2,}|^#{1,6}\s+",
+    re.MULTILINE)
 
 
 def _norm_quote(text: str) -> str:
@@ -89,7 +95,11 @@ def misquotations(answer: str, rulebook, question: str | None = None) -> list[st
     for match in QUOTED_SPAN.finditer(answer):
         span = match.group(0)[1:-1]
         # Punctuation placed inside the closing quote is a typographic convention.
-        needle = _norm_quote(span).rstrip(",;:. ")
+        # strip_markdown on both sides: the haystack is stripped, so a quotation that
+        # faithfully preserves the rulebook's own **bold** would otherwise be reported
+        # as fabricated. That false positive lands preferentially on the Sonnet 4.6
+        # failover path, which emits markdown (SPEC 15).
+        needle = _norm_quote(strip_markdown(span)).rstrip(",;:. ")
         if len(needle) < 25:
             continue
         position, ok = 0, True
@@ -311,9 +321,12 @@ def check(data: dict, rulebook, question: str | None = None,
     # unreliable only at admitting a conflict it would rather resolve. So the register
     # wins when the answer denies a conflict, and the answer wins when it identifies
     # the relationship as general/specific over the same sections.
-    vetoed = (kind == "general_specific" and set(declared) & set().union(
-        *(k.sections for k in register)) if register else False)
     for known in (register or []):
+        # The veto is per-pair and requires the whole pair to be named. Unioning every
+        # register entry let a general/specific declaration about one pair suppress the
+        # check for an unrelated one; an intersection let naming half a pair suppress it.
+        # SPEC 6.2 says "identify the pair", so this is a subset test on that pair.
+        vetoed = kind == "general_specific" and known.sections <= set(declared)
         if (abstained is False and not vetoed and question and known.bears_on(question)
                 and known.sections <= set(normalised)):
             problems.append(Problem(
@@ -380,10 +393,30 @@ def repair_note(problems: list[Problem]) -> str:
     return " ".join(f"{p.code}: {p.detail}" for p in problems)
 
 
-def finalise(qid: str, data: dict, rulebook, problems: list[Problem]) -> tuple[dict, list[str]]:
+def finalise(qid: str, data: dict, rulebook, problems: list[Problem],
+             question: str | None = None) -> tuple[dict, list[str]]:
     """Build the emitted record, applying SPEC 7 and 10 fallbacks to what remains."""
     notes: list[str] = []
     answer = strip_markdown(str(data.get("answer") or ""))
+
+    # SPEC 10: a hard problem must never reach stdout. Every other hard code had a
+    # fallback and this one did not, so a fabricated quotation was emitted verbatim.
+    # The content cannot be repaired mechanically, but the false attribution can be
+    # removed: the span stops claiming to be the rulebook's words, and the reader is
+    # told. Excising the text instead would leave incoherent prose mid-sentence.
+    unverified = misquotations(answer, rulebook, question)
+    quarantined: set[str] = set()
+    for span in unverified:
+        quarantined |= {f"§{m.group(1)}" for m in PROSE_REF.finditer(span)}
+        for quote in ('"', "\u201c", "\u201d"):
+            answer = answer.replace(f'{quote}{span}', span).replace(f'{span}{quote}', span)
+    if unverified:
+        answer = answer.rstrip() + (
+            " (One passage above could not be matched to the rulebook's wording, so it "
+            "is the agent's paraphrase and not a quotation.)")
+        notes.append(f"de-quoted {len(unverified)} unverified quotation(s); "
+                     f"section refs inside them not promoted: {sorted(quarantined)}")
+
     answer, digitised = digitise(answer)
     abstained = data.get("abstained")
     abstained = True if not isinstance(abstained, bool) else abstained
@@ -414,8 +447,13 @@ def finalise(qid: str, data: dict, rulebook, problems: list[Problem]) -> tuple[d
     # Strip any prose reference that survived to a section we are not citing, so the
     # emitted record cannot carry a dangling id.
     dangling = sorted({f"§{m.group(1)}" for m in PROSE_REF.finditer(answer)} - set(citations))
-    real = [sid for sid in dangling if sid in rulebook.sections]
-    unreal = [sid for sid in dangling if sid not in rulebook.sections]
+    # A ref that occurs only inside an unverified quotation is an artifact of that
+    # fabrication, so it is de-sigilled rather than promoted. Otherwise a made-up quote
+    # inflates the citation array, which is what happened on Q16.
+    real = [sid for sid in dangling
+            if sid in rulebook.sections and sid not in quarantined]
+    unreal = [sid for sid in dangling
+              if sid not in rulebook.sections or sid in quarantined]
     if real:
         # The answer genuinely leans on these, so cite them rather than editing the
         # text. Rewriting is not safe here: a dangling ref can sit inside a quotation,
@@ -424,8 +462,12 @@ def finalise(qid: str, data: dict, rulebook, problems: list[Problem]) -> tuple[d
         notes.append(f"added prose-referenced section(s) to citations: {real}")
     for sid in unreal:
         answer = re.sub(re.escape(sid) + _TAIL, "section " + sid[1:], answer)
-    if unreal:
-        notes.append(f"de-sigilled reference(s) to nonexistent section(s): {unreal}")
+    absent = [sid for sid in unreal if sid not in rulebook.sections]
+    if absent:
+        notes.append(f"de-sigilled reference(s) to nonexistent section(s): {absent}")
+    if len(unreal) > len(absent):
+        notes.append("de-sigilled real section ref(s) that occurred only inside an "
+                     f"unverified quotation: {[s for s in unreal if s in rulebook.sections]}")
 
     denied = next((p for p in problems if p.code == "denied_known_contradiction"), None)
     if denied and abstained is False:
