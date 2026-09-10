@@ -151,6 +151,25 @@ heading text alone. Cosmetics are tolerated; semantics are never guessed. A mis-
 index yields confident answers carrying plausible-but-wrong citations, which is a worse
 outcome than no answers at all.
 
+**A well-formed rulebook must never be refused**, and three rules exist because it was.
+
+- **A subsection marker must open a block** — first line, after a blank line, or after a
+  heading. Without that, a body line merely *beginning* with a cross-reference — "§3.1
+  also applies. After your actions, …" — is read as a second §3.1. The cost is that
+  subsections packed with no blank line between them go unseen, which the
+  unparsed-outline guard reports loudly rather than mis-parsing; that is the trade this
+  section already asks for.
+- **A repeated id is not fatal.** The first occurrence wins, later ones are treated as
+  prose, and the collision is warned about with real line numbers. This is what catches a
+  cross-reference that does happen to sit at a block start, so both rules are needed —
+  neither alone is sufficient. It was fatal, and that turned one over-eager marker match
+  into a refused rulebook: exit 2 and an ungrounded record for every question, on a file
+  that was fine. The worst available outcome on the day the edition changes, and not
+  fixable after the build freezes.
+- **A failure building one variant is that variant's failure, not the run's.** The ladder
+  must still reach the next convention. An exception raised while assembling sections used
+  to escape the loop entirely, so the ladder this section promises was silently skipped.
+
 **On failure this is a precondition failure, not a degradation, and the two must not look
 alike:**
 
@@ -545,12 +564,23 @@ shape across primary and fallback, and §10 was always the layer that actually e
 schema. Losing `strict` costs a guarantee the agent never relied on.
 
 **Consequence of dropping `strict`:** the model intermittently emits its closing tag and
-the parameters that should follow it *inside* the value of `answer`, so `citations` never
-arrives as its own key. The agent detects this and recovers the leaked parameters
-deterministically before validation. The data is all present -- only the framing is wrong
--- and discarding a sound answer over a serialisation slip would be the worse failure. Every
-salvage is logged to stderr, because the frequency is a fact about the model that belongs
-in the evidence pack rather than being smoothed over.
+the parameters that should follow it *inside* the value of `answer`. The agent recovers
+them deterministically before validation. The data is all present — only the framing is
+wrong — and discarding a sound answer over a serialisation slip would be the worse
+failure. Every salvage is logged, because the frequency is a fact about the model that
+belongs in the evidence pack rather than being smoothed over.
+
+**Two dialects, both observed.** One wraps each argument in `<parameter name="x">`; the
+other names each tag after its field and terminates with `</invoke>`. Handling only the
+first cost a correct answer: on Q23 the second dialect lost `abstained`, §10 defaulted it
+to `true`, and a question the rulebook settles shipped as an abstention — with the model's
+own `<abstained>false</abstained>` sitting in plain sight in the answer text. A fixture
+caught it; no invariant did.
+
+**Salvage is gated on having recovered something**, or on a closing tag proving the
+machinery leaked — never on merely seeing a tag. Keying off the tag would truncate any
+answer that *discusses* one, which is exactly the hostile-input case §8 covers: a question
+containing `<parameter name=x>` is player text and passes through untouched.
 
 **Observed at build step 0, and the reason §7 normalises before validating:** both models
 returned the *entire section text* as the citation string —
@@ -692,17 +722,38 @@ Failure → one repair attempt → then the documented fallback. Every intervent
 to stderr with the id and the rule that fired, so the mutation blocks and `NOTES.md` can
 name real events instead of describing intentions.
 
+**Which attempt is kept.** A repair is adopted only on a strict improvement, ranked
+`(hard problems, total problems)`. Comparing counts alone accepted a retry that traded a
+mechanically-fixable soft problem for a hard *fabricated quotation* — 2 ≤ 2 — and the
+fabrication reached stdout. Severity before count.
+
 **Mechanical transforms, applied without asking the model:** markdown stripped; a prose
 `§`-reference to a real but uncited section added to `citations`; a reference to a
 nonexistent section de-sigilled to words; quantity words rewritten as digits (§11.2).
 Each is meaning-preserving and each is logged. Rewriting never touches text inside
-quotation marks, because mangling a quotation is worse than the defect being fixed.
+quotation marks, because mangling a quotation is worse than the defect being fixed —
+except to strip markdown decoration, which restores the rulebook's true wording rather
+than altering it.
+
+Stripping markdown is narrower than it sounds: only asterisks hugging non-space,
+non-digit text. A bare asterisk between digits is multiplication, and eating it turned
+"3*2 = 6" into "32 = 6" — a fabricated number inside a computed answer that no fixture
+would catch, because the expected total was still present.
 
 **Fallbacks when a repair does not land:** invalid citations dropped; a definitive answer
 with no surviving citation downgraded to an abstention; an answer below the length floor
 replaced; a canary leak replaced wholesale; and — for a ruled-on register contradiction —
 `abstained` forced true, both sections added to `citations`, and a sentence appended
 naming the conflict, so the player is warned even when the model refused to warn them.
+
+**A fabricated quotation** is de-quoted: the span stops claiming to be the rulebook's
+words and the answer says so. The content cannot be repaired mechanically; the false
+attribution can, and excising the text would leave incoherent prose mid-sentence. Any
+`§`-reference occurring *only* inside such a span is quarantined — de-sigilled rather than
+promoted — so a made-up quotation cannot launder sections into the citation array. This
+was the one hard code with no fallback, which is how a fabricated quotation of §3.1,
+rendering "from the list in §4" as "§4.1-§4.4", reached stdout with `['§3.1','§4.1','§4.4']`
+behind it.
 
 ## 11. Answer style
 
@@ -819,6 +870,7 @@ deterministic, and a flaky suite is worse evidence than a weaker one.
 | `test_answer_substantive` | answer ≥ 20 chars; A1/A2/A3 abstentions ≥ 60 (§11.1) |
 | `test_no_prompt_leak` | the system-prompt canary appears in no answer |
 | `test_citations_sorted_unique` | document order, no duplicates |
+| `test_quotations_verbatim` | every quoted span appears in the rulebook, or in the question |
 | `test_rulebook_parsed` | no record carries the §2.4 parse-failure marker |
 | `test_answers_follow_swapped_rulebook` | against `tiny_rulebook.md`, answers track the fixture |
 
@@ -958,5 +1010,34 @@ Each changed the spec, not just the code.
   the response cache and §12's tolerant assertions are the only stability mechanisms, and
   the measured citation drift (7–8 of 25 questions) is why §12 asserts required/forbidden
   sets rather than exact ones.
+
+**Found by review of the working build, after the above.** Each was verified from the
+committed artifacts before it was changed:
+
+- **A repeated section marker refused a well-formed rulebook** (§2.4). A body line opening
+  with a cross-reference parsed as a duplicate, raised, escaped the variant ladder, and
+  cost every answer in the batch. Two rules were needed, not one, and neither alone is
+  sufficient.
+- **A fabricated quotation reached stdout** (§10). Retry acceptance compared problem
+  counts rather than severity and adopted a strictly worse attempt; `misquotation` was
+  the one hard code with no fallback; and the fabricated references were then promoted
+  into the citation array. Three defects compounding into one bad record, and the suite
+  was silent on all of it.
+- **The misquotation check was markdown-blind on one side** (§10), so a faithful quotation
+  preserving the rulebook's own emphasis was reported as fabricated — landing
+  preferentially on the Sonnet 4.6 failover path, which emits markdown, i.e. when the
+  agent is already degraded.
+- **Markdown stripping ate an arithmetic operator** (§10), turning "3*2 = 6" into
+  "32 = 6". Silent: the expected total was still present, so no fixture noticed.
+- **The contradiction veto was too broad in two ways** (§6.2) — a union across register
+  entries and an intersection test — so one pair could suppress another, and half a pair
+  could suppress itself. Latent at one register entry, live from two.
+- **A second tool-call dialect lost `abstained`** (§9.2), defaulting a definitive answer
+  into an abstention.
+
+The pattern worth naming: five of these six were invisible to the suite at the time, and
+four of them produced a plausible-looking record rather than an obvious failure. That is
+the argument for §12's invariants over fixtures, and for treating "the suite is green" as
+weaker evidence than it feels.
 
 Anything discovered after this point is recorded in `NOTES.md`.
