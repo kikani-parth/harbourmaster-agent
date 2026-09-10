@@ -81,11 +81,28 @@ def inference_for(model_id: str) -> dict:
 # (SPEC 9.2), so it is recovered here instead. The data is all present -- only the
 # framing is wrong -- and discarding a sound answer over a serialisation slip would be
 # the worse failure.
-_LEAK_SPLIT = re.compile(r"</\s*(?:answer|parameter)\s*>", re.IGNORECASE)
+_LEAK_FIELDS = ("citations", "abstained", "question_class", "conflict")
+
+# Two dialects observed. The first wraps each argument in <parameter name="x">; the
+# second names the tag after the field and terminates with </invoke>. The second one
+# cost a correct answer: `<abstained>false</abstained>` sat in plain sight in the
+# answer text while the record defaulted to abstained=true, turning a definitive
+# ruling into a false abstention that only a fixture caught.
 _LEAKED_PARAM = re.compile(
     r"<parameter\s+name=\"(\w+)\"\s*>\s*(.*?)\s*(?=</parameter>|<parameter\s+name=|\Z)",
     re.DOTALL | re.IGNORECASE,
 )
+_LEAKED_TAG = re.compile(
+    r"<\s*(" + "|".join(_LEAK_FIELDS) + r")\s*>\s*(.*?)\s*</\s*\1\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+# Where the prose ends and the leaked machinery begins.
+_LEAK_MARKER = re.compile(
+    r"</\s*answer\s*>|</?\s*invoke[^>]*>|<\s*parameter\s+name=|<\s*(?:"
+    + "|".join(_LEAK_FIELDS) + r")\s*>",
+    re.IGNORECASE,
+)
+_TERMINATOR = re.compile(r"</\s*(?:answer|invoke)\s*>", re.IGNORECASE)
 
 
 def salvage_tool_leak(data: dict, *, log=None) -> dict:
@@ -93,23 +110,30 @@ def salvage_tool_leak(data: dict, *, log=None) -> dict:
     if not isinstance(data, dict):
         return data
     answer = data.get("answer")
-    if not isinstance(answer, str) or "<parameter" not in answer:
+    if not isinstance(answer, str):
         return data
 
-    head = _LEAK_SPLIT.split(answer, maxsplit=1)[0].strip()
     recovered = {}
-    for name, raw in _LEAKED_PARAM.findall(answer):
-        raw = raw.strip()
-        try:
-            recovered[name] = json.loads(raw)
-        except json.JSONDecodeError:
-            if raw.lower() in ("true", "false"):
-                recovered[name] = raw.lower() == "true"
-            else:
-                recovered[name] = raw
+    for pattern in (_LEAKED_PARAM, _LEAKED_TAG):
+        for name, raw in pattern.findall(answer):
+            name, raw = name.lower(), raw.strip()
+            if name in recovered:
+                continue
+            try:
+                recovered[name] = json.loads(raw)
+            except json.JSONDecodeError:
+                recovered[name] = (raw.lower() == "true"
+                                   if raw.lower() in ("true", "false") else raw)
 
+    # Only treat this as a leak if something was actually recovered, or a closing tag
+    # proves the machinery leaked. A question that merely mentions "<parameter name=x>"
+    # is player text and must pass through untouched.
+    if not recovered and not _TERMINATOR.search(answer):
+        return data
+
+    cuts = [mark.start() for mark in _LEAK_MARKER.finditer(answer)]
     out = dict(data)
-    out["answer"] = head
+    out["answer"] = answer[:min(cuts)].strip() if cuts else answer.strip()
     for name, value in recovered.items():
         # Only fill fields the tool call did not deliver properly.
         if out.get(name) in (None, "", [], {}):
