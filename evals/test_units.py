@@ -24,7 +24,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from harbourmaster import rulebook  # noqa: E402
+from harbourmaster import defects, rulebook, validate  # noqa: E402
 from harbourmaster.model import salvage_tool_leak  # noqa: E402
 
 QUIET = io.StringIO()
@@ -119,6 +119,80 @@ class WordFormVariant(unittest.TestCase):
         self.assertIn("did not parse as sections", caught.exception.diagnostic)
 
 
+class ParserResilience(unittest.TestCase):
+    """A well-formed rulebook must never be refused. Nothing here is fixable after the
+    build freezes, and a refusal costs every answer in the batch (SPEC 2.4)."""
+
+    def test_body_line_opening_with_a_cross_reference_is_not_a_section(self):
+        # "§3.1 also applies. After your actions, ..." was read as a second §3.1,
+        # which raised, escaped the variant ladder, and refused the whole rulebook.
+        text = WORD_FORM.replace("Section 2.2 Place four", "Section 2.1 also applies. Place four")
+        rb = load_text(text)
+        self.assertEqual(rb.variant, "word-form")
+        self.assertIn("§2.1", rb.sections)
+        self.assertIn("§1", rb.sections)
+
+    def test_duplicate_id_is_not_fatal_and_first_wins(self):
+        text = WORD_FORM + "\n\nSection 2.1 A later paragraph that repeats an id.\n"
+        rb = load_text(text)
+        self.assertIn("§2.1", rb.sections)
+        self.assertIn("Deal seven Bell cards", rb.sections["§2.1"].text)
+        self.assertNotIn("A later paragraph", rb.sections["§2.1"].text)
+
+    def test_build_failure_does_not_abort_the_ladder(self):
+        # The sigil variant finds nothing here, so the ladder must reach word-form.
+        rb = load_text(WORD_FORM)
+        self.assertEqual(rb.variant, "word-form")
+
+    def test_ordering_survives_a_skipped_duplicate(self):
+        rb = load_text(WORD_FORM + "\n\nSection 1 Repeated heading.\n")
+        self.assertEqual(rb.ids, sorted(rb.ids, key=rb.order_of))
+
+
+class MarkdownStripping(unittest.TestCase):
+    def test_preserves_an_asterisk_used_as_an_operator(self):
+        # Stripping it turned "3*2 = 6" into "32 = 6" -- a fabricated number inside a
+        # computed answer that no fixture would catch, since 6 was still present.
+        for text in ("score 3 * 2 = 6 points", "score 3*2 = 6 points"):
+            self.assertEqual(validate.strip_markdown(text), text)
+
+    def test_still_strips_emphasis_and_bullets(self):
+        self.assertEqual(
+            validate.strip_markdown("moves **three cards** of a *single suit*"),
+            "moves three cards of a single suit")
+        self.assertEqual(validate.strip_markdown("- bullet item"), "bullet item")
+
+
+class ContradictionVeto(unittest.TestCase):
+    """SPEC 6.2: a general/specific declaration vetoes the register for THAT pair."""
+
+    PAIRS = (("§4.2", "§7.1"), ("§4.4", "§5.1"))
+
+    def setUp(self):
+        self.rb = rulebook.load("RULEBOOK.md", log=QUIET)
+        self.register = [defects.Contradiction(frozenset(p), ("Spice", "unload"), "n")
+                         for p in self.PAIRS]
+
+    def _codes(self, declared):
+        data = {"answer": "A Spice 4 scores 4 points and you may unload 3.",
+                "citations": ["§4.2", "§7.1", "§4.4", "§5.1"], "abstained": False,
+                "question_class": "general_specific",
+                "conflict": {"kind": "general_specific", "sections": declared,
+                             "bears_on_answer": True, "note": "x"}}
+        return [p.code for p in validate.check(
+            data, self.rb, "How much is a Spice 4 worth when I unload it?", self.register)]
+
+    def test_naming_one_pair_does_not_veto_the_other(self):
+        # A union over every register entry suppressed unrelated pairs as well.
+        self.assertEqual(self._codes(["§4.4", "§5.1"]).count(
+            "denied_known_contradiction"), 1)
+
+    def test_naming_half_a_pair_does_not_veto_it(self):
+        # An intersection test let one section of the pair suppress the check.
+        self.assertEqual(self._codes(["§4.4"]).count(
+            "denied_known_contradiction"), 2)
+
+
 class SalvageToolLeak(unittest.TestCase):
     # Verbatim shape observed from Sonnet 5: the closing tag and every parameter
     # after it land inside the value of `answer`, and `citations` never arrives.
@@ -169,6 +243,37 @@ class SalvageToolLeak(unittest.TestCase):
         data = {"answer": 'Text.</answer>\n'
                           '<parameter name="question_class">direct</parameter>'}
         self.assertEqual(salvage_tool_leak(data)["question_class"], "direct")
+
+    # Second dialect: tags named after the field, terminated by </invoke>. Observed on
+    # Q23, where `abstained` was lost and defaulted to true -- a false abstention on a
+    # question the rulebook settles.
+    TAG_LEAKED = {
+        "answer": (
+            "Your premise is off: Sail does not move a Ship between Docks."
+            '</answer>\n<citations>["\u00a74.3"]</citations>\n'
+            "<abstained>false</abstained>\n"
+            "<question_class>false_premise</question_class>\n</invoke>\n"
+        ),
+    }
+
+    def test_recovers_the_tag_dialect(self):
+        out = salvage_tool_leak(dict(self.TAG_LEAKED))
+        self.assertIs(out["abstained"], False)
+        self.assertEqual(out["question_class"], "false_premise")
+        self.assertEqual(out["citations"], ["\u00a74.3"])
+
+    def test_tag_dialect_answer_is_cut_at_the_prose_boundary(self):
+        out = salvage_tool_leak(dict(self.TAG_LEAKED))
+        self.assertEqual(
+            out["answer"],
+            "Your premise is off: Sail does not move a Ship between Docks.")
+        for leaked in ("<abstained>", "</invoke>", "<citations>"):
+            self.assertNotIn(leaked, out["answer"])
+
+    def test_a_lost_boolean_is_not_silently_defaulted(self):
+        # The bug: abstained absent -> validate defaults it to True -> a definitive
+        # answer ships as an abstention. Recovery must return the model's actual value.
+        self.assertIsNot(salvage_tool_leak(dict(self.TAG_LEAKED)).get("abstained"), None)
 
     def test_tolerates_hostile_and_malformed_input(self):
         for bad in (None, [], "a string", 42):

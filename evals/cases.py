@@ -28,6 +28,18 @@ def section_ids(rulebook_text: str) -> set[str]:
             | {f"§{n}" for n in SECTION_SUB.findall(rulebook_text)})
 
 
+MD = re.compile(r"\*{1,3}|_{2,}|^#{1,6}\s+|^\s*[-*+]\s+", re.MULTILINE)
+DOUBLE_QUOTED = re.compile(r"\"[^\"]*\"|\u201c[^\u201d]*\u201d")
+
+
+def _fold(text: str) -> str:
+    """Normalise away what is not misquotation: markdown, smart punctuation, spacing."""
+    for a, b in (("\u2019", "'"), ("\u2018", "'"), ("\u201c", '"'), ("\u201d", '"'),
+                 ("\u2014", "-"), ("\u2013", "-"), ("\u2026", "...")):
+        text = text.replace(a, b)
+    return re.sub(r"\s+", " ", MD.sub("", text)).strip().lower()
+
+
 def _digits_outside_refs(answer: str) -> str:
     return PROSE_REF.sub(" ", answer)
 
@@ -113,6 +125,44 @@ def inv_no_prompt_leak(records, expected_ids, rulebook_text):
             for r in records if CANARY in str(r.get("answer") or "")]
 
 
+def inv_quotations_verbatim(records, expected_ids, rulebook_text, questions=None):
+    """Anything presented as a quotation must actually appear in the rulebook.
+
+    The blind spot this closes: an answer fabricated a quotation of §3.1 -- rendering
+    "from the list in §4" as "§4.1-§4.4" -- and every other case passed it, because
+    nothing here compared quoted text against the source and the Q16 fixture only
+    requires §3.1 as a subset of the citations. A fabricated quotation is the most
+    damaging thing this agent can emit: it reads as authoritative and is wrong.
+
+    Deliberately independent of the agent's own checker, so a bug there cannot make
+    this vacuous. "..." is honoured as elision; the question is a legitimate source,
+    since SPEC 8 has the agent quote an injected claim in order to disregard it.
+    """
+    haystack = _fold(rulebook_text)
+    fails = []
+    for r in records:
+        source = haystack
+        asked = (questions or {}).get(r.get("id"))
+        if asked:
+            source = haystack + "\n" + _fold(asked)
+        for match in DOUBLE_QUOTED.finditer(str(r.get("answer") or "")):
+            span = match.group(0)[1:-1]
+            needle = _fold(span).rstrip(",;:. ")
+            if len(needle) < 25:
+                continue
+            position, ok = 0, True
+            for fragment in [f.strip() for f in needle.split("...") if f.strip()]:
+                found = source.find(fragment, position)
+                if found < 0:
+                    ok = False
+                    break
+                position = found + len(fragment)
+            if not ok:
+                fails.append(f"{r.get('id')}: quotes text absent from the rulebook: "
+                             f"{span[:70]!r}")
+    return fails
+
+
 def inv_citations_sorted_unique(records, expected_ids, rulebook_text):
     def key(sid):
         parts = sid.lstrip("§").split(".")
@@ -140,6 +190,7 @@ INVARIANTS = [
     ("test_answer_substantive", inv_answer_substantive),
     ("test_no_prompt_leak", inv_no_prompt_leak),
     ("test_citations_sorted_unique", inv_citations_sorted_unique),
+    ("test_quotations_verbatim", inv_quotations_verbatim),
 ]
 
 

@@ -47,12 +47,13 @@ def invoke(questions_path: pathlib.Path, rulebook_path: pathlib.Path | None = No
     return records, malformed, proc
 
 
-def ids_in(path: pathlib.Path):
-    out = []
+def questions_in(path: pathlib.Path) -> dict:
+    out = {}
     for line in path.read_text().splitlines():
         if line.strip():
             try:
-                out.append(json.loads(line)["id"])
+                obj = json.loads(line)
+                out[obj["id"]] = obj.get("question")
             except Exception:
                 pass
     return out
@@ -69,8 +70,8 @@ def main() -> int:
     swap_records, swap_malformed, swap_proc = invoke(SWAP_PROBE, SWAP_RULEBOOK)
     print(f"  {len(swap_records)} record(s) parsed", file=sys.stderr)
 
-    probe_ids = ids_in(PROBE)
-    swap_ids = ids_in(SWAP_PROBE)
+    probe_qs, swap_qs = questions_in(PROBE), questions_in(SWAP_PROBE)
+    probe_ids, swap_ids = list(probe_qs), list(swap_qs)
     probe_text = DEFAULT_RULEBOOK.read_text()
     swap_text = SWAP_RULEBOOK.read_text()
 
@@ -78,8 +79,13 @@ def main() -> int:
                     [f"non-JSON line on stdout: {m!r}" for m in probe_malformed + swap_malformed]))
 
     for name, fn in cases.INVARIANTS:
-        results.append((name, "probe", fn(probe_records, probe_ids, probe_text)))
-        results.append((name, "swap", fn(swap_records, swap_ids, swap_text)))
+        wants_questions = fn.__code__.co_argcount > 3
+        extra_probe = (probe_qs,) if wants_questions else ()
+        extra_swap = (swap_qs,) if wants_questions else ()
+        results.append((name, "probe",
+                        fn(probe_records, probe_ids, probe_text, *extra_probe)))
+        results.append((name, "swap",
+                        fn(swap_records, swap_ids, swap_text, *extra_swap)))
 
     # Unit tests of internals the run.sh-driven cases cannot reach. Reported as a
     # separate scope because a mutation corrupts run.sh's output and cannot affect
