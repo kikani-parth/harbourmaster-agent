@@ -1,4 +1,4 @@
-# HARBOURMASTER — Official Rules (v1.2)
+# HARBOURMASTER — Official Rules (v1.3)
 
 *A trading game for 2–4 players, ages 10+, 45 minutes.*
 
@@ -8,6 +8,7 @@
 
 - 60 **Cargo cards** in four suits — Grain, Timber, Iron, Spice — values 1 to 5 (three of each value per suit)
 - 12 **Dock tiles**, numbered 1 to 12
+- 1 **Lighthouse tile**
 - 4 **Ship pawns**, one per player
 - 1 **Harbourmaster token**
 - 1 **Storm die** (six sides: four blank, two marked with a wave)
@@ -22,6 +23,8 @@
 
 §2.4 The player who most recently travelled by boat takes the Harbourmaster token and becomes the first player. Play proceeds clockwise.
 
+§2.5 Place the Lighthouse tile at the head of the Quay. See §9.
+
 ## §3 Turn Structure
 
 §3.1 On your turn, take exactly **two actions** from the list in §4. You may not take the same action twice in one turn.
@@ -34,7 +37,7 @@
 
 §4.1 **Draw** — take two Cargo cards from the Draw Pile into your Hold.
 
-§4.2 **Load** — move up to three Cargo cards of a *single suit* from your Hold onto your Ship. Cards on your Ship are face up and may be seen by all players. Spice is the most valuable trade good in the harbour and counts double when scored.
+§4.2 **Load** — move up to three Cargo cards of a *single suit* from your Hold onto your Ship. Cards on your Ship are face up and may be seen by all players.
 
 §4.3 **Sail** — move your Ship from the Open Sea to any unoccupied Dock tile on the Quay, or from a Dock tile back to the Open Sea. Only one Ship may occupy a Dock tile at a time.
 
@@ -42,7 +45,7 @@
 
 ## §5 Docking
 
-§5.1 A player may unload more than three Cargo cards onto a Dock tile only if they hold the Harbourmaster token.
+§5.1 A player may unload more than two Cargo cards onto a Dock tile only if they hold the Harbourmaster token.
 
 §5.2 Cargo unloaded onto a Dock tile stays there for the rest of the game and cannot be reclaimed.
 
@@ -84,3 +87,11 @@
 §8.3 Cards remaining in Holds and on Ships score nothing.
 
 §8.4 The player with the most points wins. In the event of a tie, the player holding the Harbourmaster token wins. If neither tied player holds it, the tied player who most recently unloaded cargo wins.
+
+## §9 The Lighthouse
+
+§9.1 The Lighthouse tile is placed at the head of the Quay during setup. It is not one of the twelve Dock tiles and is not among the six placed in §2.2.
+
+§9.2 A Ship may Sail to the Lighthouse from the Open Sea, or from the Lighthouse to the Open Sea. Any number of Ships may be at the Lighthouse at once.
+
+§9.3 A Ship at the Lighthouse is treated as being at a Dock for the purposes of §6.2.
