@@ -97,7 +97,15 @@ class Rulebook:
 
 
 def _markers(lines: list[str], heading_re, sub_re) -> list[tuple[str, str, int]]:
-    """Return (id, title, line_index) for every marker the two patterns find."""
+    """Return (id, title, line_index) for every marker the two patterns find.
+
+    A subsection marker must OPEN A BLOCK -- first line, after a blank line, or after
+    a heading. Without that, a body line merely beginning with a cross-reference
+    ("§3.1 also applies. After your actions, ...") is read as a second §3.1 and the
+    whole rulebook is refused. The cost is that subsections packed with no blank line
+    between them would go unseen; that is caught loudly by the unparsed-outline guard
+    rather than mis-parsed, which is the trade SPEC 2.4 asks for.
+    """
     found: list[tuple[str, str, int]] = []
     for i, line in enumerate(lines):
         m = heading_re.match(line)
@@ -106,24 +114,33 @@ def _markers(lines: list[str], heading_re, sub_re) -> list[tuple[str, str, int]]
             continue
         m = sub_re.match(line)
         if m:
-            found.append((f"§{m.group(1)}", "", i))
+            previous = lines[i - 1] if i else ""
+            if i == 0 or not previous.strip() or heading_re.match(previous):
+                found.append((f"§{m.group(1)}", "", i))
     return found
 
 
-def _build(lines: list[str], found) -> dict[str, Section]:
-    """A section runs from its own marker to the next marker, or to EOF."""
+def _build(lines: list[str], found, *, log=None) -> dict[str, Section]:
+    """A section runs from its own marker to the next marker, or to EOF.
+
+    A repeated id is NOT fatal. It was, and that made a single over-eager marker match
+    refuse an otherwise well-formed rulebook -- the worst possible outcome on the day
+    the edition changes. The first occurrence wins, later ones are treated as prose,
+    and the collision is reported with real line numbers.
+    """
     sections: dict[str, Section] = {}
+    first_line: dict[str, int] = {}
     for order, (sid, title, start) in enumerate(found):
         end = found[order + 1][2] if order + 1 < len(found) else len(lines)
-        text = "\n".join(lines[start:end]).rstrip()
-        # A duplicate id means the file is malformed; first occurrence wins and the
-        # collision is surfaced rather than silently overwritten.
         if sid in sections:
-            raise RulebookError(
-                f"duplicate section id {sid}",
-                f"{sid} declared at lines {sections[sid].order} and {order}",
-            )
-        sections[sid] = Section(id=sid, number=sid[1:], title=title, text=text, order=order)
+            if log:
+                print(f"warn: {sid} appears again at line {start + 1} (first at line "
+                      f"{first_line[sid] + 1}); treating the later one as prose", file=log)
+            continue
+        first_line[sid] = start
+        text = "\n".join(lines[start:end]).rstrip()
+        sections[sid] = Section(id=sid, number=sid[1:], title=title, text=text,
+                                order=len(sections))
     return sections
 
 
@@ -177,12 +194,17 @@ def _unparsed_outline(lines: list[str], ids: set[str]) -> list[str]:
     return missed
 
 
-def _try_variant(lines, raw, name, heading_re, sub_re):
+def _try_variant(lines, raw, name, heading_re, sub_re, *, log=None):
     """Return (rulebook_fields, None) on success or (None, reason) on guard failure."""
     found = _markers(lines, heading_re, sub_re)
     if not found:
         return None, "no section markers found"
-    sections = _build(lines, found)
+    try:
+        sections = _build(lines, found, log=log)
+    except RulebookError as exc:
+        # A failure building one variant is that variant's failure, not the run's:
+        # the ladder must still get to try the next convention (SPEC 2.4).
+        return None, f"could not build sections: {exc}"
     cov = _coverage(lines, found)
     if cov < COVERAGE_MIN:
         return None, f"coverage {cov:.0%} below {COVERAGE_MIN:.0%} ({len(sections)} sections)"
@@ -224,7 +246,7 @@ def load(path: str | None = None, *, log=sys.stderr) -> Rulebook:
 
     attempts: list[str] = []
     for name, heading_re, sub_re in VARIANTS:
-        ok, reason = _try_variant(lines, raw, name, heading_re, sub_re)
+        ok, reason = _try_variant(lines, raw, name, heading_re, sub_re, log=log)
         if ok:
             sections, cov = ok
             tops = sum(1 for s in sections if "." not in s)
