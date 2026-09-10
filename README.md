@@ -20,8 +20,10 @@ without weakening any guarantee.
 | `harbourmaster/prompt.py` | system prompt (the SPEC's policy) + tool schema |
 | `harbourmaster/model.py` | Bedrock Converse, model failover, response cache, token accounting |
 | `harbourmaster/validate.py` | the deterministic checks: citations, quotations, abstention, length |
+| `harbourmaster/defects.py` | independent audit of the rulebook's contradictions, run once per edition and cached |
 | `evals/cases.py` | invariants (any input, any rulebook) + fixtures (the 25 known questions) |
 | `evals/runner.py` | invokes `./run.sh` as a subprocess and reports |
+| `evals/test_units.py` | unit tests for internals the run.sh-driven cases can't reach |
 | `evals/fixtures/tiny_rulebook.md` | a different game, to prove the rulebook is data |
 | `evals/mutation_yours.py` | the mutation the suite deliberately does not catch |
 | `SPEC.md` | the spec the agent was built to, written before the code |
