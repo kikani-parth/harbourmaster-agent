@@ -9,10 +9,16 @@
 set -eu
 cd "$(dirname "$0")"
 
+# Windows Python defaults stdio and files to cp1252, which writes "§" as 0xA7 and
+# breaks every consumer expecting UTF-8 JSONL. Harmless on Linux.
+export PYTHONUTF8=1
+
 if [ -n "${HARBOURMASTER_PYTHON:-}" ]; then
     PY="$HARBOURMASTER_PYTHON"
 elif [ -x .venv/bin/python3 ]; then
     PY=.venv/bin/python3
+elif [ -x .venv/Scripts/python.exe ]; then
+    PY=.venv/Scripts/python.exe
 else
     PY=python3
 fi

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -32,8 +33,12 @@ def invoke(questions_path: pathlib.Path, rulebook_path: pathlib.Path | None = No
         env["HARBOURMASTER_RULEBOOK"] = str(rulebook_path)
     else:
         env.pop("HARBOURMASTER_RULEBOOK", None)
+    # Windows ignores the shebang and cannot execute run.sh directly (WinError 193). A bare
+    # "bash" is also wrong there: CreateProcess searches System32 before PATH and launches
+    # WSL's bash, which cannot run the Windows venv. Resolve Git Bash through PATH instead.
+    cmd = [shutil.which("bash") or "bash", "run.sh"] if os.name == "nt" else [RUN]
     proc = subprocess.run(
-        [RUN], stdin=questions_path.open("rb"), capture_output=True, cwd=ROOT, env=env,
+        cmd, stdin=questions_path.open("rb"), capture_output=True, cwd=ROOT, env=env,
     )
     records, malformed = [], []
     for line in proc.stdout.decode("utf-8", "replace").splitlines():
